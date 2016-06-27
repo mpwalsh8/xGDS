@@ -351,11 +351,15 @@ def main(argv):
 
     ##  Check for required options
 
-    for r in ('gdsin', 'gdsin'):
-        if globals()[r] is None and not gui:
-            Transcript("--{} argument is required".format(r), "error", False)
-            usage(os.path.basename(sys.argv[0]))
-            sys.exit(2)
+#    for r in ('gdsin', 'gdsin'):
+#        if globals()[r] is None and not gui:
+#            Transcript("--{} argument is required".format(r), "error", False)
+#            usage(os.path.basename(sys.argv[0]))
+#            sys.exit(2)
+
+    ##  If Gui not specified but GDS not provided, default to GUI
+    if gdsin is None and not gui:
+        gui = True
 
     #  Try and launch Xpedition, it should already be open
     try:
@@ -387,7 +391,7 @@ def main(argv):
         Transcript("GDS Import Python script connected to PCB database \"{}\".".format(pcbDoc.Name), "note")
         
     ##  Present GUI?
-    if gui:
+    if gui or gdsin is None:
         root = Tkinter.Tk()
         root.title("Import GDS")
         #root.geometry("600x600+300+300")
@@ -418,14 +422,12 @@ def main(argv):
     ##  Lock the Server?
     if lockserver:
         ls = pcbApp.LockServer
-        eprint(str(ls))
-        if pcbApp.LockServer:
+        if ls:
             Transcript("Locking Server ...", "note")
 
     ##  Start Transaction?
     if transaction:
         trs = pcbDoc.TransactionStart(0)
-        eprint(str(trs))
         if trs:
             Transcript("Starting Transaction ...", "note")
 
@@ -462,6 +464,8 @@ def main(argv):
                 Transcript("GDS Box element has not been implemented.", "warning")
 
             rc+= 1
+#            if rc == 25:
+#                break
         
     ##  Start Transaction?
     if transaction:
@@ -490,6 +494,8 @@ def main(argv):
 ##  setupUserLayer
 ##
 def setupUserLayer(uln):
+    global pcbApp, pcbDoc, pcbUtil
+
     ul = pcbDoc.FindUserLayer(uln)
 
     ##  If the user layer doesn't exist, it needs to be  created
@@ -504,6 +510,17 @@ def setupUserLayer(uln):
     else:
         #ul = pcbDoc.ActiveView.DisplayControl.UserLayer(uln)
         #ul = True
+
+        ##  Create a color pattern to assign to the layer
+        cp = pcbUtil.NewColorPattern(239, 239, 239, True, 14, True)
+        dc = pcbDoc.ActiveView.DisplayControl.Global
+        #eprint('\n\n----')
+        #print(pcbApp)
+        #print(ul)
+        #print(dc)
+        #eprint(str(ul))
+        #eprint(str(cp))
+        #eprint('----')
         Transcript("User Layer \"{}\" setup for GDS import.".format(uln), "note")
 
     return ul
@@ -548,10 +565,12 @@ def drawBoundry(elem):
     ##  If the user layer doesn't exist, it needs to be  created
     if ul == None:
         ul = setupUserLayer(uln)
+    #ul = setupUserLayer(uln)
 
     if ul == None:
         Transcript("Unable to find User Layer \"{}\", Boundary element skipped.".format(uln), "error")
     else:
+        eprint("==> {}".format(str(pcbDoc)))
         pcbDoc.PutUserLayerGfx(ul, 5.0, len(X), xyr, True, None, 5)
     #sys.exit(2)
 
@@ -570,7 +589,7 @@ def usage(prog):
 
     """
     eprint(usage)
-    eprint('Usage: %s --gdsin <input.gds>' % prog)
+    eprint('Usage: %s --gds <input.gds>' % prog)
 
 if __name__ == '__main__':
     if (len(sys.argv) > 0):
