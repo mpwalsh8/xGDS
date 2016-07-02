@@ -1,5 +1,6 @@
 
-# Python utility to import GDS files into Mentor Graphics XpeditionPCB.
+# xGDSImport.py
+Python utility to import GDS files into Mentor Graphics XpeditionPCB.
 
 This projects used the [Python GDSII library](https://pypi.python.org/pypi/python-gdsii) from Eugeniy Meshcheryakov.  The source code repository for this library no longer resolves so the source has been incorporated into this project.
 
@@ -27,8 +28,9 @@ C:\Users\mike\Documents\xGDS>python xGDSImport.py --help
 
     
 Usage: xGDSImport.py --gds <input.gds>
+```
 
-## Example Run
+## Sample Execution
 
 C:\Users\mike\Documents\xGDS>python xGDSImport.py --gds P9_Flat.gds --replace --transaction
 // 
@@ -58,6 +60,7 @@ C:\Users\mike\Documents\xGDS>python xGDSImport.py --gds P9_Flat.gds --replace --
 // GDS import complete, check for errors. (xGDSImport.py)
 
 C:\Users\mike\Documents\xGDS>
+```
 
 ## Notes
 
