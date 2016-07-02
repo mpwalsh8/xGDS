@@ -34,7 +34,7 @@
 
 from __future__ import print_function
 
-import os, sys, inspect, getopt, csv, time, datetime
+import os, sys, inspect, getopt, csv, time, datetime, random
 
 ##  Set the Python path so the GDSII library can be imported from directory
 ##  where this script was run from.  The Python function realpath() will make
@@ -57,8 +57,10 @@ from gdsii.elements import *
 import Tkinter, Tkconstants, tkFileDialog
 
 #  need access to Python's COM interface
-import win32com.client
 import pythoncom
+import win32com.client
+import win32com.client.gencache
+from win32com.client import constants
 
 DATE='Sat June 25 15:55:54 EDT 2016'
 VERSION='1.0-beta-1'
@@ -76,10 +78,12 @@ if sys.version_info < ( 2, 6):
 
 debug = False
 gdsin = None
+replace = False
 progress = False
 lockserver = False
 transaction = False
 work = None
+shuffle = False
 
 ##  Global variables to store the Xpedition application
 ##  and document objects so they don't need to be passed.
@@ -102,7 +106,7 @@ def GetLicensedDoc(appObj):
         sys.exit("Terminating script, unable to obtain PCB Document.")
 
     key = docObj.Validate(0)
-    licenseServer = win32com.client.Dispatch("MGCPCBAutomationLicensing.Application")
+    licenseServer = win32com.client.gencache.EnsureDispatch("MGCPCBAutomationLicensing.Application")
     licenseToken = licenseServer.GetToken(key)
 
     try:
@@ -148,13 +152,14 @@ class BuildGUI(Tkinter.Frame):
     handles = []
     widgets = {}
 
-    def __init__(self, parent, gdsin=None, progress=False, lockserver=False, transaction=False, work=os.getcwd()):
+    def __init__(self, parent, gdsin=None, replace=True, progress=False, lockserver=False, transaction=False, work=os.getcwd()):
         Tkinter.Frame.__init__(self, parent)
 
         ##  Init class properties
         self.parent = parent
 
         self.work = work
+        self.replace = replace
         self.progress = progress
         self.lockserver = lockserver
         self.transaction = transaction
@@ -174,11 +179,12 @@ class BuildGUI(Tkinter.Frame):
         sys.exit(2)
 
     def Run(self):
-        global gdsin, progress, lockserver, transaction
+        global gdsin, replace, progress, lockserver, transaction
 
         ##  Set the global variables based on the current state of the GUI
 
         gdsin = self.widgets['inputgds'].get()
+        replace = self.widgets['opts.lf.rpl'].get()
         progress = self.widgets['opts.lf.rp'].get()
         lockserver = self.widgets['opts.lf.ls'].get()
         transaction = self.widgets['opts.lf.tr'].get()
@@ -240,26 +246,33 @@ class BuildGUI(Tkinter.Frame):
         self.widgets['opts.lf'] = Tkinter.LabelFrame(self.widgets['ifr'], text='Options', padx=5, pady=5)
         self.widgets['opts.lf'].grid(row=4, column=0, sticky=Tkconstants.E + Tkconstants.W, pady=10)
 
+        self.widgets['opts.lf.rpl'] = Tkinter.BooleanVar()
+        self.widgets['opts.lf.rpl'].set(self.replace)
+        self.widgets['opts.lf.rpl.cb'] = Tkinter.Checkbutton(self.widgets['opts.lf'], \
+            text='Replace GDS layer content (previously imported GDS date will be deleted)', onvalue=True, \
+            offvalue=False, variable=self.widgets['opts.lf.rpl'])
+        self.widgets['opts.lf.rpl.cb'].grid(row=0, column=0, sticky=Tkconstants.W, padx=5)
+
         self.widgets['opts.lf.rp'] = Tkinter.BooleanVar()
         self.widgets['opts.lf.rp'].set(self.progress)
         self.widgets['opts.lf.rp.cb'] = Tkinter.Checkbutton(self.widgets['opts.lf'], \
             text='Report Progress (detailed progress messages during GDS import)', onvalue=True, \
             offvalue=False, variable=self.widgets['opts.lf.rp'])
-        self.widgets['opts.lf.rp.cb'].grid(row=0, column=0, sticky=Tkconstants.W, padx=5)
+        self.widgets['opts.lf.rp.cb'].grid(row=1, column=0, sticky=Tkconstants.W, padx=5)
 
         self.widgets['opts.lf.ls'] = Tkinter.BooleanVar()
         self.widgets['opts.lf.ls'].set(self.lockserver)
         self.widgets['opts.lf.ls.cb'] = Tkinter.Checkbutton(self.widgets['opts.lf'], \
             text='Lock Server (Lock Server during GDS import - improves performance)', onvalue=True, \
             offvalue=False, variable=self.widgets['opts.lf.ls'])
-        self.widgets['opts.lf.ls.cb'].grid(row=1, column=0, sticky=Tkconstants.W, padx=5)
+        self.widgets['opts.lf.ls.cb'].grid(row=2, column=0, sticky=Tkconstants.W, padx=5)
 
         self.widgets['opts.lf.tr'] = Tkinter.BooleanVar()
         self.widgets['opts.lf.tr'].set(self.transaction)
         self.widgets['opts.lf.tr.cb'] = Tkinter.Checkbutton(self.widgets['opts.lf'], \
             text='Use Transactions (wrap GDS import in a single transaction - improves performance)', onvalue=True, \
             offvalue=False, variable=self.widgets['opts.lf.tr'])
-        self.widgets['opts.lf.tr.cb'].grid(row=2, column=0, sticky=Tkconstants.W, padx=5)
+        self.widgets['opts.lf.tr.cb'].grid(row=3, column=0, sticky=Tkconstants.W, padx=5)
 
         ## Separator
         self.widgets['separator'] = Tkinter.Frame(self.widgets['ofr'], height=2, borderwidth=2, relief=Tkconstants.SUNKEN)
@@ -297,8 +310,8 @@ def main(argv):
     ##  Parse command line
 
     try:
-        opts, args = getopt.getopt(argv, "dghi:lptvw:", \
-            ["debug", "gui", "help", "gds=", "lockserver", "progress", "transaction", "version", "work="])
+        opts, args = getopt.getopt(argv, "dghi:lprtvw:", \
+            ["debug", "gui", "help", "gds=", "lockserver", "progress", "replaced", "transaction", "version", "work="])
     except getopt.GetoptError, err:
         eprint(err)
         usage(os.path.basename(sys.argv[0]))
@@ -340,9 +353,12 @@ def main(argv):
             lockserver = True
         if opt in ("-p", "--progress"):
             progress = True
+        if opt in ("-r", "--replace"):
+            replace = True
+            Transcript("{} option enabled".format(opt), "note", False)
         if opt in ("-t", "--transaction"):
             transaction = True
-            Transcript("{} enabled".format(opt), "note", False)
+            Transcript("{} option enabled".format(opt), "note", False)
         if opt in ("-w", "--work"):
             work = arg
             Transcript("{} set to:  {}".format(opt, arg), "note", False)
@@ -363,7 +379,7 @@ def main(argv):
 
     #  Try and launch Xpedition, it should already be open
     try:
-        pcbApp = win32com.client.Dispatch("MGCPCB.ExpeditionPCBApplication")
+        pcbApp = win32com.client.gencache.EnsureDispatch("MGCPCB.ExpeditionPCBApplication")
         pcbGui = pcbApp.Gui
         pcbUtil = pcbApp.Utility
         pcbApp.Visible = 1
@@ -395,7 +411,7 @@ def main(argv):
         root = Tkinter.Tk()
         root.title("Import GDS")
         #root.geometry("600x600+300+300")
-        app = BuildGUI(root, gdsin, progress, lockserver, transaction, work)
+        app = BuildGUI(root, gdsin, replace, progress, lockserver, transaction, work)
         root.mainloop()
 
     ##  Make sure input file exists!
@@ -419,6 +435,18 @@ def main(argv):
     with open(gdsin, 'rb') as stream:
         lib = Library.load(stream)
 
+    ##  "Pre-scan" the GDS to gather up the layers that will be imported.
+    gdslayers = []
+
+    for struc in lib:
+        for elem in struc:
+            gdslayer = "{}.{}".format(elem.layer, elem.data_type)
+            if gdslayer not in gdslayers:
+                gdslayers.append(gdslayer)
+
+    for gdslayer in gdslayers:
+        Transcript("GDS layer {} will be imported.".format(gdslayer), "note")
+
     ##  Lock the Server?
     if lockserver:
         ls = pcbApp.LockServer
@@ -431,13 +459,48 @@ def main(argv):
         if trs:
             Transcript("Starting Transaction ...", "note")
 
-    ##  Traverse the design, looking for layers to import
+    ##  Replace existing layers?
+    if replace:
+        for gdslayer in gdslayers:
+            uln = "GDS_{}".format(gdslayer)
+            ul = pcbDoc.FindUserLayer(uln)
+            if ul != None:
+                Transcript("User Layer {} will be replaced.".format(uln), "warning")
+                ##  Select All on the user layer
+                ug = pcbDoc.GetUserLayerGfxs(constants.epcbSelectAll, uln, False)
 
+                ##  Delete everything selected
+                if ug != None:
+                    ug.Delete()
+                else:
+                    Transcript("User Layer {} is empty.".format(uln), "note")
+                    
+                ##  Delete the user layer - it will be recreated on import
+                ul.Delete()
+
+    ##  Setup User Layers for GDS import
+    colorpatterns = [ \
+        pcbApp.Utility.NewColorPattern(255, 0, 0, 100, 14, False, False),       # Red  \
+        pcbApp.Utility.NewColorPattern(0, 255, 0, 100, 14, False, False),       # Blue \
+        pcbApp.Utility.NewColorPattern(0, 0, 255, 100, 14, False, False),       # Green \
+        pcbApp.Utility.NewColorPattern(255, 0, 255, 100, 14, False, False),     # Purple \
+        pcbApp.Utility.NewColorPattern(255, 255, 0, 100, 14, False, False),     # Yellow \
+        pcbApp.Utility.NewColorPattern(0, 255, 255, 100, 14, False, False),     # Aqua \
+    ]
+
+    ##  Shuffle the color patterns just to mix up the colors ...
+    if shuffle:
+        random.shuffle(colorpatterns)
+
+    ##  Loop through the layers in the GDS file and set up a user layer for each
+    for gdslayer in gdslayers:
+        uln = "GDS_{}".format(gdslayer)
+        cp = colorpatterns[(gdslayers.index(gdslayer) % len(colorpatterns))]
+        setupUserLayer(uln, cp)
+
+    ##  Traverse the design, looking for layers to import
     for struc in lib:
         for elem in struc:
-            ##  As objects are found in the GDS stream the layer
-            ##  is adjusted per the mapping file.
-
             if progress:
                 Transcript("GDS Element on Layer {}" .format(elem.layer), "note")
                 Transcript("GDS Element of Datatype {}".format(elem.data_type), "note")
@@ -470,7 +533,6 @@ def main(argv):
     ##  Start Transaction?
     if transaction:
         tre = pcbDoc.TransactionEnd(True)
-        eprint(str(tre))
         if tre:
             Transcript("Ending Transaction ...", "note")
 
@@ -493,7 +555,7 @@ def main(argv):
 ##
 ##  setupUserLayer
 ##
-def setupUserLayer(uln):
+def setupUserLayer(uln, cp):
     global pcbApp, pcbDoc, pcbUtil
 
     ul = pcbDoc.FindUserLayer(uln)
@@ -508,19 +570,21 @@ def setupUserLayer(uln):
     if ul == None:
         Transcript("Unabled to setup User Layer \"{}\" for GDS import.".format(uln), "error")
     else:
-        #ul = pcbDoc.ActiveView.DisplayControl.UserLayer(uln)
-        #ul = True
+        ##  Get a reference to Display Control
+        dc = pcbDoc.ActiveView.DisplayControl
 
-        ##  Create a color pattern to assign to the layer
-        cp = pcbUtil.NewColorPattern(239, 239, 239, True, 14, True)
-        dc = pcbDoc.ActiveView.DisplayControl.Global
-        #eprint('\n\n----')
-        #print(pcbApp)
-        #print(ul)
-        #print(dc)
-        #eprint(str(ul))
-        #eprint(str(cp))
-        #eprint('----')
+        ##  Handle for Global Display Control object
+        gbl = dc.Global
+
+        ##  Handle for User Layer
+        ul = pcbDoc.FindUserLayer(uln)
+
+	    ## Make sure the User Layer is visible
+        pcbDoc.ActiveView.DisplayControl.SetUserLayer(ul, True)
+
+        ##  Change the pattern of the User Layer to the color pattern
+        gbl.SetUserLayerColor(uln, cp)
+
         Transcript("User Layer \"{}\" setup for GDS import.".format(uln), "note")
 
     return ul
@@ -542,9 +606,13 @@ def drawBoundry(elem):
     R = []
 
     ##  Need to convert Nanometers in the GDS file to microns ...
+    ##
+    ##  @TODO - extract actual units from GDS file and handle them properly!
+    ##
+
     for xy in elem.xy:
-        X.append(xy[0] * 0.001)
-        Y.append(xy[1] * 0.001)
+        X.append(xy[0] * 0.001)  ## Assumed to be converting from nanometers to microns
+        Y.append(xy[1] * 0.001)  ## Assumed to be converting from nanometers to microns
         R.append(0.0)
 
     ##  Need to close the polygon by replicating the first element as the last.
@@ -562,26 +630,22 @@ def drawBoundry(elem):
     ##  Check if GDS user layer has already been setup
     ul = pcbDoc.FindUserLayer(uln)
 
-    ##  If the user layer doesn't exist, it needs to be  created
-    if ul == None:
-        ul = setupUserLayer(uln)
-    #ul = setupUserLayer(uln)
-
+    ##  If the user layer doesn't exist, something is wrong ...
     if ul == None:
         Transcript("Unable to find User Layer \"{}\", Boundary element skipped.".format(uln), "error")
     else:
-        eprint("==> {}".format(str(pcbDoc)))
-        pcbDoc.PutUserLayerGfx(ul, 5.0, len(X), xyr, True, None, 5)
-    #sys.exit(2)
+        pcbDoc.PutUserLayerGfx(ul, 5.0, len(X), xyr, True, None, constants.epcbUnitUM)
 
 
 def usage(prog):
     usage = """
+    -d --debug                Report detailed information while reading GDS
     -g --gui                  Use GUI, default when missing --gds option
     -i --gds <gdsfile>        GDS input file
     -h --help                 Display this help content
     -l --lockserver           Lock Xpedition Server to improve performance
     -p --progress             Report progress during GDS import
+    -r --replace              Replace existing user layers when importing GDS
     -t --transaction          Wrap GDS import in a Transaction to improve performance
     -v --version              Print version number
     -w --work <path>          Initial path for GDS file selection, default to current directory
