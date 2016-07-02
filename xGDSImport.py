@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # vim: set expandtab tabstop=4 shiftwidth=4:
 #
-#  xGDS.py - import GDS into Xpedition
+#  xGDSImport.py - Import GDS into Xpedition
 #
 #  (c) June 2016 - Mentor Graphics Corporation
 #   
@@ -31,9 +31,13 @@
 #                 in the python-gdsii module library.  More details on
 #                 the library:  https://pypi.python.org/pypi/python-gdsii
 #
+#    07/01/2016 - Cleaned up User Layer operations, assigned color patterns,
+#                 added key bindings and other polish.
+#
+#    07/02/2016 - Added Python 2.7 and 3.5 compatibility.
+#
 
 from __future__ import print_function
-
 import os, sys, inspect, getopt, csv, time, datetime, random
 
 ##  Set the Python path so the GDSII library can be imported from directory
@@ -54,16 +58,20 @@ from gdsii.record import Record
 from gdsii.library import Library
 from gdsii.elements import *
 
-import Tkinter, Tkconstants, tkFileDialog
+##  Gracefully handle compatibility between Python 2.7 and 3.5
+try:
+    import Tkinter as TK, Tkconstants as TKConst, tkFileDialog as TKFileDialog
+except ImportError:
+    import tkinter as TK, tkinter.constants as TKConst, tkinter.filedialog as TKFileDialog
 
 #  need access to Python's COM interface
-import pythoncom
+#import pythoncom
 import win32com.client
 import win32com.client.gencache
 from win32com.client import constants
 
-DATE='Sat June 25 15:55:54 EDT 2016'
-VERSION='1.0-beta-1'
+DATE='Sat July 02 06:30:54 EDT 2016'
+VERSION='1.0-beta-2'
 
 # Check python version
 
@@ -71,19 +79,18 @@ if sys.version_info < ( 2, 6):
     # python too old, kill the script
     sys.exit("This script requires Python 2.6 or newer!")
 
-##  Global variables to store the layer mapping data
-##  We are using global variables because the mapping
-##  can be read from a CSV file and then modified via
-##  the GUI.
+##  Global variables to store the state variables which
+##  control execution of the script.  We are using global
+##  variables because it makes interaction with GUI easier.
 
 debug = False
 gdsin = None
 replace = False
 progress = False
 lockserver = False
+shuffle = False
 transaction = False
 work = None
-shuffle = False
 
 ##  Global variables to store the Xpedition application
 ##  and document objects so they don't need to be passed.
@@ -102,7 +109,7 @@ def GetLicensedDoc(appObj):
         docObj = appObj.ActiveDocument
         #print docObj
         
-    except pythoncom.com_error, (hr, msg, exc, arg):
+    except pythoncom.com_error(hr, msg, exc, arg):
         sys.exit("Terminating script, unable to obtain PCB Document.")
 
     key = docObj.Validate(0)
@@ -111,20 +118,20 @@ def GetLicensedDoc(appObj):
 
     try:
         docObj.Validate(licenseToken)
-    except pythoncom.com_error, (hr, msg, exc, arg):
+    except pythoncom.com_error(hr, msg, exc, arg):
         sys.exit("Terminating script, unable to obtain Automation license.")
 
     return docObj
 
 ##  General purpose print function to place
 ##  output on stderr
-def eprint(*args, **kwargs):
+def tprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
 
 
 ##  Debug Output for GDS elements
 def showData(rec):
-    """Shows data in a human-readable format."""
+    """Shows GDS data in a human-readable format."""
     if rec.tag_type == types.ASCII:
         return '"%s"' % rec.data.decode() # TODO escape
     elif rec.tag_type == types.BITARRAY:
@@ -138,22 +145,23 @@ def Transcript(msg, svrty = None, echo = True):
     global pcbApp
 
     if svrty == None:
-        eprint("// {}".format(msg))
+        tprint("// {}".format(msg))
         if echo:
             pcbApp.Addins("Message Window").Control.AddTab("Output").AppendText("{}\n".format(msg))
     else:
-        eprint("// {}:  {}".format(svrty.title(), msg))
+        tprint("// {}:  {}".format(svrty.title(), msg))
         if echo:
             pcbApp.Addins("Message Window").Control.AddTab("Output").AppendText("{}:  {}\n".format(svrty.title(), msg))
     
 
 ##  BuildGUI
-class BuildGUI(Tkinter.Frame):
+class BuildGUI(TK.Frame):
     handles = []
     widgets = {}
 
-    def __init__(self, parent, gdsin=None, replace=True, progress=False, lockserver=False, transaction=False, work=os.getcwd()):
-        Tkinter.Frame.__init__(self, parent)
+    def __init__(self, parent, gdsin=None, replace=True, progress=False, \
+            lockserver=False, shuffle=False, transaction=False, work=os.getcwd()):
+        TK.Frame.__init__(self, parent)
 
         ##  Init class properties
         self.parent = parent
@@ -162,6 +170,7 @@ class BuildGUI(Tkinter.Frame):
         self.replace = replace
         self.progress = progress
         self.lockserver = lockserver
+        self.shuffle = shuffle
         self.transaction = transaction
         self.gdsin = gdsin
 
@@ -178,8 +187,11 @@ class BuildGUI(Tkinter.Frame):
         Transcript("GDS import canceled, no action performed.", "warning")
         sys.exit(2)
 
+    def EscapeKey(self, event):
+        self.Cancel()
+
     def Run(self):
-        global gdsin, replace, progress, lockserver, transaction
+        global gdsin, replace, progress, lockserver, shuffle, transaction
 
         ##  Set the global variables based on the current state of the GUI
 
@@ -187,9 +199,13 @@ class BuildGUI(Tkinter.Frame):
         replace = self.widgets['opts.lf.rpl'].get()
         progress = self.widgets['opts.lf.rp'].get()
         lockserver = self.widgets['opts.lf.ls'].get()
+        shuffle = self.widgets['opts.lf.sfl'].get()
         transaction = self.widgets['opts.lf.tr'].get()
 
         self.quit()
+
+    def ReturnKey(self, event):
+        self.Run()
 
     ##  Construct the GUI
     def InitGUI(self):
@@ -201,7 +217,7 @@ class BuildGUI(Tkinter.Frame):
             ('All Files', '*') )
 
         self.parent.title('Import GDS Layers v' + VERSION)
-        self.pack(fill=Tkconstants.BOTH, expand=True)
+        self.pack(fill=TKConst.BOTH, expand=True)
 
         ##  Dictionary for file input entry / browse button pairs
         fileinputs = {
@@ -209,32 +225,32 @@ class BuildGUI(Tkinter.Frame):
         }
 
         ##  Create the outer frame
-        self.widgets['ofr'] = Tkinter.Frame(self, relief=Tkconstants.FLAT)
-        self.widgets['ofr'].pack(fill=Tkconstants.BOTH, expand=True)
+        self.widgets['ofr'] = TK.Frame(self, relief=TKConst.FLAT)
+        self.widgets['ofr'].pack(fill=TKConst.BOTH, expand=True)
 
         ##  Create the inner frame
-        self.widgets['ifr'] = Tkinter.Frame(self.widgets['ofr'], padx=5, pady=5, borderwidth=5, relief=Tkconstants.FLAT)
-        self.widgets['ifr'].pack(fill=Tkconstants.BOTH, expand=True)
+        self.widgets['ifr'] = TK.Frame(self.widgets['ofr'], padx=5, pady=5, borderwidth=5, relief=TKConst.FLAT)
+        self.widgets['ifr'].pack(fill=TKConst.BOTH, expand=True)
 
         ##  Create file entry box / browse button pairs
         ##  Each pair sits insite a label frame
         row = 0
         for (key, value) in fileinputs.items():
-            #eprint("Key:  " + key)
-            #eprint("Row:  %s" % row)
+            #tprint("Key:  " + key)
+            #tprint("Row:  %s" % row)
 
-            self.widgets[key] = Tkinter.StringVar()
-            self.widgets[key + '.lf'] = Tkinter.LabelFrame(self.widgets['ifr'], \
+            self.widgets[key] = TK.StringVar()
+            self.widgets[key + '.lf'] = TK.LabelFrame(self.widgets['ifr'], \
                 text=value[0], padx=5, pady=5)
             self.widgets[key + '.lf'].grid(row=value[2], column=0, pady=10)
  
-            self.widgets[key + '.e'] = Tkinter.Entry(self.widgets[key + '.lf'], width=60, \
-                relief=Tkconstants.SUNKEN, textvariable=self.widgets[key], borderwidth=2)
-            self.widgets[key + '.e'].pack(fill=Tkconstants.X, side=Tkconstants.LEFT, padx=5, expand=True)
-            self.widgets[key + '.b'] = Tkinter.Button(self.widgets[key + '.lf'], text=value[0] + ' ...', width=15, \
-                command=(lambda key=key, value=value: self.widgets[key].set(tkFileDialog.askopenfilename(filetypes=value[1],
+            self.widgets[key + '.e'] = TK.Entry(self.widgets[key + '.lf'], width=60, \
+                relief=TKConst.SUNKEN, textvariable=self.widgets[key], borderwidth=2)
+            self.widgets[key + '.e'].pack(fill=TKConst.X, side=TKConst.LEFT, padx=5, expand=True)
+            self.widgets[key + '.b'] = TK.Button(self.widgets[key + '.lf'], text=value[0] + ' ...', width=15, \
+                command=(lambda key=key, value=value: self.widgets[key].set(TKFileDialog.askopenfilename(filetypes=value[1],
                 initialdir=value[3]))))
-            self.widgets[key + '.b'].pack(fill=Tkconstants.X, side=Tkconstants.RIGHT, padx=5, expand=False)
+            self.widgets[key + '.b'].pack(fill=TKConst.X, side=TKConst.RIGHT, padx=5, expand=False)
 
             row +=1
 
@@ -243,54 +259,58 @@ class BuildGUI(Tkinter.Frame):
             self.widgets['inputgds'].set(self.gdsin)
 
         ##  Options to drive the mapping
-        self.widgets['opts.lf'] = Tkinter.LabelFrame(self.widgets['ifr'], text='Options', padx=5, pady=5)
-        self.widgets['opts.lf'].grid(row=4, column=0, sticky=Tkconstants.E + Tkconstants.W, pady=10)
+        self.widgets['opts.lf'] = TK.LabelFrame(self.widgets['ifr'], text='Options', padx=5, pady=5)
+        self.widgets['opts.lf'].grid(row=4, column=0, sticky=TKConst.E + TKConst.W, pady=10)
 
-        self.widgets['opts.lf.rpl'] = Tkinter.BooleanVar()
+        self.widgets['opts.lf.rpl'] = TK.BooleanVar()
         self.widgets['opts.lf.rpl'].set(self.replace)
-        self.widgets['opts.lf.rpl.cb'] = Tkinter.Checkbutton(self.widgets['opts.lf'], \
+        self.widgets['opts.lf.rpl.cb'] = TK.Checkbutton(self.widgets['opts.lf'], \
             text='Replace GDS layer content (previously imported GDS date will be deleted)', onvalue=True, \
             offvalue=False, variable=self.widgets['opts.lf.rpl'])
-        self.widgets['opts.lf.rpl.cb'].grid(row=0, column=0, sticky=Tkconstants.W, padx=5)
+        self.widgets['opts.lf.rpl.cb'].grid(row=0, column=0, sticky=TKConst.W, padx=5)
 
-        self.widgets['opts.lf.rp'] = Tkinter.BooleanVar()
+        self.widgets['opts.lf.rp'] = TK.BooleanVar()
         self.widgets['opts.lf.rp'].set(self.progress)
-        self.widgets['opts.lf.rp.cb'] = Tkinter.Checkbutton(self.widgets['opts.lf'], \
+        self.widgets['opts.lf.rp.cb'] = TK.Checkbutton(self.widgets['opts.lf'], \
             text='Report Progress (detailed progress messages during GDS import)', onvalue=True, \
             offvalue=False, variable=self.widgets['opts.lf.rp'])
-        self.widgets['opts.lf.rp.cb'].grid(row=1, column=0, sticky=Tkconstants.W, padx=5)
+        self.widgets['opts.lf.rp.cb'].grid(row=1, column=0, sticky=TKConst.W, padx=5)
 
-        self.widgets['opts.lf.ls'] = Tkinter.BooleanVar()
+        self.widgets['opts.lf.ls'] = TK.BooleanVar()
         self.widgets['opts.lf.ls'].set(self.lockserver)
-        self.widgets['opts.lf.ls.cb'] = Tkinter.Checkbutton(self.widgets['opts.lf'], \
+        self.widgets['opts.lf.ls.cb'] = TK.Checkbutton(self.widgets['opts.lf'], \
             text='Lock Server (Lock Server during GDS import - improves performance)', onvalue=True, \
             offvalue=False, variable=self.widgets['opts.lf.ls'])
-        self.widgets['opts.lf.ls.cb'].grid(row=2, column=0, sticky=Tkconstants.W, padx=5)
+        self.widgets['opts.lf.ls.cb'].grid(row=2, column=0, sticky=TKConst.W, padx=5)
 
-        self.widgets['opts.lf.tr'] = Tkinter.BooleanVar()
+        self.widgets['opts.lf.tr'] = TK.BooleanVar()
         self.widgets['opts.lf.tr'].set(self.transaction)
-        self.widgets['opts.lf.tr.cb'] = Tkinter.Checkbutton(self.widgets['opts.lf'], \
+        self.widgets['opts.lf.tr.cb'] = TK.Checkbutton(self.widgets['opts.lf'], \
             text='Use Transactions (wrap GDS import in a single transaction - improves performance)', onvalue=True, \
             offvalue=False, variable=self.widgets['opts.lf.tr'])
-        self.widgets['opts.lf.tr.cb'].grid(row=3, column=0, sticky=Tkconstants.W, padx=5)
+        self.widgets['opts.lf.tr.cb'].grid(row=3, column=0, sticky=TKConst.W, padx=5)
+
+        self.widgets['opts.lf.sfl'] = TK.BooleanVar()
+        self.widgets['opts.lf.sfl'].set(self.shuffle)
+        self.widgets['opts.lf.sfl.cb'] = TK.Checkbutton(self.widgets['opts.lf'], \
+            text='Shuffle Color Patterns (shuffle color pattern assignment)', onvalue=True, \
+            offvalue=False, variable=self.widgets['opts.lf.sfl'])
+        self.widgets['opts.lf.sfl.cb'].grid(row=4, column=0, sticky=TKConst.W, padx=5)
 
         ## Separator
-        self.widgets['separator'] = Tkinter.Frame(self.widgets['ofr'], height=2, borderwidth=2, relief=Tkconstants.SUNKEN)
-        self.widgets['separator'].pack(fill=Tkconstants.X, expand=True, padx=5, pady=5)
+        self.widgets['separator'] = TK.Frame(self.widgets['ofr'], height=2, borderwidth=2, relief=TKConst.SUNKEN)
+        self.widgets['separator'].pack(fill=TKConst.X, expand=True, padx=5, pady=5)
 
         ##  Create the button frame
-        self.widgets['bfr'] = Tkinter.Frame(self.widgets['ofr'], padx=5, pady=5, borderwidth=5, relief=Tkconstants.FLAT)
-        self.widgets['bfr'].pack(side=Tkconstants.BOTTOM, expand=False)
+        self.widgets['bfr'] = TK.Frame(self.widgets['ofr'], padx=5, pady=5, borderwidth=5, relief=TKConst.FLAT)
+        self.widgets['bfr'].pack(side=TKConst.BOTTOM, expand=False)
 
         ##  Buttons
-        self.widgets['bfr.run'] = Tkinter.Button(self.widgets['bfr'], text='Run', width=15, command=self.Run)
-        self.widgets['bfr.run'].pack(fill=Tkconstants.Y, expand=False, side=Tkconstants.LEFT, padx=5)
-        self.widgets['bfr.cancel'] = Tkinter.Button(self.widgets['bfr'], text='Cancel', width=15, command=self.Cancel)
-        self.widgets['bfr.cancel'].pack(fill=Tkconstants.Y, expand=False, side=Tkconstants.LEFT, padx=5)
+        self.widgets['bfr.run'] = TK.Button(self.widgets['bfr'], text='Run', width=15, command=self.Run)
+        self.widgets['bfr.run'].pack(fill=TKConst.Y, expand=False, side=TKConst.LEFT, padx=5)
+        self.widgets['bfr.cancel'] = TK.Button(self.widgets['bfr'], text='Cancel', width=15, command=self.Cancel)
+        self.widgets['bfr.cancel'].pack(fill=TKConst.Y, expand=False, side=TKConst.LEFT, padx=5)
 
-        ##  Set up a call back on Input GDS File entry box so  we can set the output file name in auto mode
-#        self.widgets['inputgds'].trace('w', lambda name, index, mode, \
-#            igds=self.widgets['inputgds'], ogds=self.widgets['outputgds']: self.InputGDSFileCallBack(igds, ogds))
 
 ##  Version
 def Version():
@@ -303,17 +323,19 @@ def Version():
 ##  Main routine
 def main(argv):
     global pcbApp, pcbDoc, pcbGui, pcbUtil
-    global gdsin, progress, lockserver, transaction, work
+    global gdsin, progress, lockserver, replace, shuffle, transaction, work
 
     Version()
 
     ##  Parse command line
 
     try:
-        opts, args = getopt.getopt(argv, "dghi:lprtvw:", \
-            ["debug", "gui", "help", "gds=", "lockserver", "progress", "replaced", "transaction", "version", "work="])
-    except getopt.GetoptError, err:
-        eprint(err)
+        opts, args = getopt.getopt(argv, "dghi:lprstvw:", [ \
+            "debug", "gui", "help", "gds=", "lockserver", \
+            "progress", "replaced", "shuffle", "transaction", \
+            "version", "work="])
+    except getopt.GetoptError as err:
+        tprint(err)
         usage(os.path.basename(sys.argv[0]))
         sys.exit(2)
 
@@ -356,6 +378,9 @@ def main(argv):
         if opt in ("-r", "--replace"):
             replace = True
             Transcript("{} option enabled".format(opt), "note", False)
+        if opt in ("-s", "--shuffle"):
+            shuffle = True
+            Transcript("{} option enabled".format(opt), "note", False)
         if opt in ("-t", "--transaction"):
             transaction = True
             Transcript("{} option enabled".format(opt), "note", False)
@@ -364,14 +389,6 @@ def main(argv):
             Transcript("{} set to:  {}".format(opt, arg), "note", False)
 
     Transcript("", None, False)
-
-    ##  Check for required options
-
-#    for r in ('gdsin', 'gdsin'):
-#        if globals()[r] is None and not gui:
-#            Transcript("--{} argument is required".format(r), "error", False)
-#            usage(os.path.basename(sys.argv[0]))
-#            sys.exit(2)
 
     ##  If Gui not specified but GDS not provided, default to GUI
     if gdsin is None and not gui:
@@ -384,7 +401,7 @@ def main(argv):
         pcbUtil = pcbApp.Utility
         pcbApp.Visible = 1
 
-    except pythoncom.com_error, (hr, msg, exc, argv):
+    except pythoncom.com_error(hr, msg, exc, argv):
         Transcript("Unabled to launch Xpedition", "error", False)
         sys.exit("Terminating script.")
         
@@ -408,10 +425,14 @@ def main(argv):
         
     ##  Present GUI?
     if gui or gdsin is None:
-        root = Tkinter.Tk()
+        root = TK.Tk()
         root.title("Import GDS")
         #root.geometry("600x600+300+300")
-        app = BuildGUI(root, gdsin, replace, progress, lockserver, transaction, work)
+        app = BuildGUI(root, gdsin, replace, progress, lockserver, shuffle, transaction, work)
+        ##  Setup key binds for Run and Cancel
+        root.bind('<Return>', app.ReturnKey)
+        root.bind('<Escape>', app.EscapeKey)
+        root.protocol("WM_DELETE_WINDOW", app.Cancel)
         root.mainloop()
 
     ##  Make sure input file exists!
@@ -598,7 +619,7 @@ def drawBoundry(elem):
     global progress
 
     if debug:
-        eprint("GDS Boundary XY:  {}".format(str(elem.xy)), "debug")
+        tprint("GDS Boundary XY:  {}".format(str(elem.xy)), "debug")
 
     ##  Need to convert the elem.xy vertices into a points array ...
     X = []
@@ -646,14 +667,15 @@ def usage(prog):
     -l --lockserver           Lock Xpedition Server to improve performance
     -p --progress             Report progress during GDS import
     -r --replace              Replace existing user layers when importing GDS
+    -s --shuffle              Shuffle color patterns assigned to GDS user layers
     -t --transaction          Wrap GDS import in a Transaction to improve performance
     -v --version              Print version number
     -w --work <path>          Initial path for GDS file selection, default to current directory
 
 
     """
-    eprint(usage)
-    eprint('Usage: %s --gds <input.gds>' % prog)
+    tprint(usage)
+    tprint('Usage: %s --gds <input.gds>' % prog)
 
 if __name__ == '__main__':
     if (len(sys.argv) > 0):
