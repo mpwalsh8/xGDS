@@ -74,8 +74,8 @@ import win32com.client
 import win32com.client.gencache
 from win32com.client import constants
 
-DATE='Wed July 06 10:32:54 EDT 2016'
-VERSION='1.0-beta-3'
+DATE='Wed July 06 16:08:54 EDT 2016'
+VERSION='1.0-beta-4'
 
 # Check python version
 
