@@ -36,6 +36,9 @@
 #
 #    07/02/2016 - Added Python 2.7 and 3.5 compatibility.
 #
+#    07/06/2016 - Added option (command line only --erase) to remove all
+#                 GDS user layers from database.
+#
 
 from __future__ import print_function
 import os, sys, inspect, getopt, csv, time, datetime, random
@@ -70,8 +73,8 @@ import win32com.client
 import win32com.client.gencache
 from win32com.client import constants
 
-DATE='Sat July 02 06:30:54 EDT 2016'
-VERSION='1.0-beta-2'
+DATE='Wed July 06 10:32:54 EDT 2016'
+VERSION='1.0-beta-3'
 
 # Check python version
 
@@ -84,6 +87,7 @@ if sys.version_info < ( 2, 6):
 ##  variables because it makes interaction with GUI easier.
 
 debug = False
+erase = True
 gdsin = None
 replace = False
 progress = False
@@ -139,7 +143,7 @@ def showData(rec):
     return ', '.join('{0}'.format(i) for i in rec.data)
 
 
-##  Output messages to console and optionally to the Xpedition
+##  Output messages to console and optionally to the Xpeditio/t
 ##  message window.  By default, all messages are sent to both.
 def Transcript(msg, svrty = None, echo = True):
     global pcbApp
@@ -191,7 +195,7 @@ class BuildGUI(TK.Frame):
         self.Cancel()
 
     def Run(self):
-        global gdsin, replace, progress, lockserver, shuffle, transaction
+        global erase, gdsin, replace, progress, lockserver, shuffle, transaction
 
         ##  Set the global variables based on the current state of the GUI
 
@@ -323,15 +327,15 @@ def Version():
 ##  Main routine
 def main(argv):
     global pcbApp, pcbDoc, pcbGui, pcbUtil
-    global gdsin, progress, lockserver, replace, shuffle, transaction, work
+    global erase, gdsin, progress, lockserver, replace, shuffle, transaction, work
 
     Version()
 
     ##  Parse command line
 
     try:
-        opts, args = getopt.getopt(argv, "dghi:lprstvw:", [ \
-            "debug", "gui", "help", "gds=", "lockserver", \
+        opts, args = getopt.getopt(argv, "deghi:lprstvw:", [ \
+            "debug", "erase", "gui", "help", "gds=", "lockserver", \
             "progress", "replaced", "shuffle", "transaction", \
             "version", "work="])
     except getopt.GetoptError as err:
@@ -346,6 +350,7 @@ def main(argv):
     ##  Initialize variables
 
     rc = 0
+    erase = False
     debug = False
     gui = False
     gdsin = None
@@ -366,6 +371,8 @@ def main(argv):
             sys.exit(0)
         if opt in ("-d", "--debug"):
             debug = True
+        if opt in ("-e", "--erase"):
+            erase = True
         if opt in ("-g", "--gui"):
             gui = True
         if opt in ("-i", "--gds"):
@@ -479,6 +486,26 @@ def main(argv):
         trs = pcbDoc.TransactionStart(0)
         if trs:
             Transcript("Starting Transaction ...", "note")
+
+    ##  Erase all GDS layers?
+    if erase:
+        for l in range(0, 255):
+            for d in range(0, 255):
+                uln = "GDS_{}.{}".format(l, d)
+                ul = pcbDoc.FindUserLayer(uln)
+                if ul != None:
+                    Transcript("User Layer {} will be erased.".format(uln), "warning")
+                    ##  Select All on the user layer
+                    ug = pcbDoc.GetUserLayerGfxs(constants.epcbSelectAll, uln, False)
+
+                    ##  Delete everything selected
+                    if ug != None:
+                        ug.Delete()
+                    else:
+                        Transcript("User Layer {} is empty.".format(uln), "note")
+                    
+                    ##  Delete the user layer - it will be recreated on import
+                    ul.Delete()
 
     ##  Replace existing layers?
     if replace:
@@ -661,6 +688,7 @@ def drawBoundry(elem):
 def usage(prog):
     usage = """
     -d --debug                Report detailed information while reading GDS
+    -e --erase                Erase any existing GDS user layers matching GDS_L.D pattern
     -g --gui                  Use GUI, default when missing --gds option
     -i --gds <gdsfile>        GDS input file
     -h --help                 Display this help content
