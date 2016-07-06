@@ -520,7 +520,7 @@ def main(argv):
 
                     ##  Delete everything selected
                     if ut != None:
-                        ug.Delete()
+                        ut.Delete()
                     else:
                         Transcript("User Layer {} has no text.".format(ul.Name), "note")
                 
@@ -552,7 +552,7 @@ def main(argv):
 
                 ##  Delete everything selected
                 if ut != None:
-                    ug.Delete()
+                    ut.Delete()
                 else:
                     Transcript("User Layer {} has no text.".format(ul.Name), "note")
                 
@@ -625,7 +625,7 @@ def main(argv):
 #            if rc == 25:
 #                break
         
-    ##  Start Transaction?
+    ##  End Transaction?
     if transaction:
         tre = pcbDoc.TransactionEnd(True)
         if tre:
@@ -772,8 +772,8 @@ def drawText(elem):
     if ul == None:
         Transcript("Unable to find User Layer \"{}\", Text element skipped.".format(uln), "error")
     else:
-        pcbDoc.PutUserLayerText(elem.string, X, Y, ul, 1.0, 0, 10, \
-            "VeriBest Gerber 0", 0, constants.epcbJustifyHCenter, \
+        pcbDoc.PutUserLayerText(elem.string, X, Y, ul, 1.0, 0, 0, \
+            "std-proportional", 0, constants.epcbJustifyHCenter, \
             constants.epcbJustifyVCenter, None, constants.epcbUnitUM, \
             constants.epcbAngleUnitDegrees)
 
