@@ -603,17 +603,15 @@ def main(argv):
             if isinstance(elem, Boundary):
                 if progress:
                     Transcript("GDS Boundary element found ...", "note")
-                #drawBoundry(elem)
+                drawBoundry(elem)
             elif isinstance(elem, Path):
                 if progress:
                     Transcript("GDS Path element found ...", "note")
                 drawPath(elem)
-                #Transcript("GDS Path element has not been implemented.", "warning")
             elif isinstance(elem, Text):
                 if progress:
                     Transcript("GDS Text element found ...", "note")
-                #drawText(elem)
-                #Transcript("GDS Text element has not been implemented.", "warning")
+                drawText(elem)
             elif isinstance(elem, Node):
                 if progress:
                     Transcript("GDS Node element found ...", "note")
