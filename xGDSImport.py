@@ -37,7 +37,8 @@
 #    07/02/2016 - Added Python 2.7 and 3.5 compatibility.
 #
 #    07/06/2016 - Added option (command line only --erase) to remove all
-#                 GDS user layers from database.
+#                 GDS user layers from database.  Added support for GDS Path
+#                 and Text elements.
 #
 
 from __future__ import print_function
@@ -468,7 +469,17 @@ def main(argv):
 
     for struc in lib:
         for elem in struc:
-            gdslayer = "{}.{}".format(elem.layer, elem.data_type)
+            if isinstance(elem, Boundary):
+                gdslayer = "{}.{}".format(elem.layer, elem.data_type)
+            if isinstance(elem, Path):
+                gdslayer = "{}.{}".format(elem.layer, elem.path_type)
+            elif isinstance(elem, Text):
+                gdslayer = "{}.{}".format(elem.layer, elem.text_type)
+            elif isinstance(elem, Node):
+                gdslayer = "{}.{}".format(elem.layer, elem.node_type)
+            elif isinstance(elem, Box):
+                gdslayer = "{}.{}".format(elem.layer, elem.box_type)
+
             if gdslayer not in gdslayers:
                 gdslayers.append(gdslayer)
 
@@ -504,8 +515,21 @@ def main(argv):
                     else:
                         Transcript("User Layer {} is empty.".format(uln), "note")
                     
+                    ##  Select All text on the user layer
+                    ut = pcbDoc.GetUserLayerTexts(constants.epcbSelectAll, ul.Name, False)
+
+                    ##  Delete everything selected
+                    if ut != None:
+                        ug.Delete()
+                    else:
+                        Transcript("User Layer {} has no text.".format(ul.Name), "note")
+                
                     ##  Delete the user layer - it will be recreated on import
-                    ul.Delete()
+                    try:
+                        ul.Delete()
+                    except:
+                        Transcript("User Layer {} was not removed.  Is it empty?".format(ul.Name), "warning")
+
 
     ##  Replace existing layers?
     if replace:
@@ -523,8 +547,21 @@ def main(argv):
                 else:
                     Transcript("User Layer {} is empty.".format(uln), "note")
                     
+                ##  Select All text on the user layer
+                ut = pcbDoc.GetUserLayerTexts(constants.epcbSelectAll, ul.Name, False)
+
+                ##  Delete everything selected
+                if ut != None:
+                    ug.Delete()
+                else:
+                    Transcript("User Layer {} has no text.".format(ul.Name), "note")
+                
                 ##  Delete the user layer - it will be recreated on import
-                ul.Delete()
+                try:
+                    ul.Delete()
+                except:
+                    Transcript("User Layer {} was not removed.  Is it empty?".format(ul.Name), "warning")
+
 
     ##  Setup User Layers for GDS import
     colorpatterns = [ \
@@ -551,20 +588,32 @@ def main(argv):
         for elem in struc:
             if progress:
                 Transcript("GDS Element on Layer {}" .format(elem.layer), "note")
-                Transcript("GDS Element of Datatype {}".format(elem.data_type), "note")
+                if isinstance(elem, Boundary):
+                    Transcript("GDS Element of Datatype {}".format(elem.data_type), "note")
+                if isinstance(elem, Path):
+                    Transcript("GDS Element of Pathtype {}".format(elem.path_type), "note")
+                elif isinstance(elem, Text):
+                    Transcript("GDS Element of Texttype {}".format(elem.text_type), "note")
+                elif isinstance(elem, Node):
+                    Transcript("GDS Element of Nodetype {}".format(elem.node_type), "note")
+                elif isinstance(elem, Box):
+                    Transcript("GDS Element of Boxtype {}".format(elem.box_type), "note")
+
 
             if isinstance(elem, Boundary):
                 if progress:
                     Transcript("GDS Boundary element found ...", "note")
-                drawBoundry(elem)
+                #drawBoundry(elem)
             elif isinstance(elem, Path):
                 if progress:
                     Transcript("GDS Path element found ...", "note")
-                Transcript("GDS Path element has not been implemented.", "warning")
+                drawPath(elem)
+                #Transcript("GDS Path element has not been implemented.", "warning")
             elif isinstance(elem, Text):
                 if progress:
                     Transcript("GDS Text element found ...", "note")
-                Transcript("GDS Text element has not been implemented.", "warning")
+                #drawText(elem)
+                #Transcript("GDS Text element has not been implemented.", "warning")
             elif isinstance(elem, Node):
                 if progress:
                     Transcript("GDS Node element found ...", "note")
@@ -683,6 +732,111 @@ def drawBoundry(elem):
         Transcript("Unable to find User Layer \"{}\", Boundary element skipped.".format(uln), "error")
     else:
         pcbDoc.PutUserLayerGfx(ul, 5.0, len(X), xyr, True, None, constants.epcbUnitUM)
+
+
+##
+##  drawText
+##
+##  Draw the text referenced on a user layer in Xpedition
+##
+##  @TODO:  Support for the font size, angle, etc. - all of
+##          the PRESENTATION aspects of text element.
+##
+def drawText(elem):
+    global progress
+
+    if progress:
+        tprint("GDS Text XY:  {}".format(str(elem.xy)), "debug")
+        tprint("GDS Text PRESENTATION:  {}".format(str(elem.presentation)), "debug")
+        tprint("GDS Text MAG:  {}".format(str(elem.mag)), "debug")
+        tprint("GDS Text ANGLE:  {}".format(str(elem.angle)), "debug")
+        tprint("GDS Text STRANS:  {}".format(str(elem.strans)), "debug")
+        tprint("GDS Text WIDTH:  {}".format(str(elem.width)), "debug")
+        tprint("GDS Text STRING:  {}".format(str(elem.string)), "debug")
+
+    ##  Need to convert Nanometers in the GDS file to microns ...
+    ##
+    ##  @TODO - extract actual units from GDS file and handle them properly!
+    ##
+
+    for xy in elem.xy:
+        X = xy[0] * 0.001  ## Assumed to be converting from nanometers to microns
+        Y = xy[1] * 0.001  ## Assumed to be converting from nanometers to microns
+
+    uln = "GDS_{}.{}".format(elem.layer, elem.text_type)
+    if progress:
+        Transcript("Drawing Text on {}".format(uln), "note")
+
+    ##  Check if GDS user layer has already been setup
+    ul = pcbDoc.FindUserLayer(uln)
+
+    ##  If the user layer doesn't exist, something is wrong ...
+    if ul == None:
+        Transcript("Unable to find User Layer \"{}\", Text element skipped.".format(uln), "error")
+    else:
+        pcbDoc.PutUserLayerText(elem.string, X, Y, ul, 1.0, 0, 10, \
+            "VeriBest Gerber 0", 0, constants.epcbJustifyHCenter, \
+            constants.epcbJustifyVCenter, None, constants.epcbUnitUM, \
+            constants.epcbAngleUnitDegrees)
+
+
+##
+##  drawPath
+##
+##  Draw the path referenced on a user layer in Xpedition
+##
+##  @TODO:  Support for line encodings, etc - all of the
+##          attributes of a path element.
+##
+def drawPath(elem):
+    global progress
+
+    if progress:
+        tprint("GDS Path XY:  {}".format(str(elem.xy)), "debug")
+        tprint("GDS Path WIDTH:  {}".format(str(elem.width)), "debug")
+        tprint("GDS Path PATHTYPE:  {}".format(str(elem.path_type)), "debug")
+
+    ##  A Path element with rounded ends (PATHTYPE == 1) is handled as a simple
+    ##  line with a width.  Square ended paths (PATHTYPE == 0 or PATHTYPE == 2)
+    ##  need to be converted from coordinate pairs to a polygon with the proper
+    ##  line end handling.
+    ##
+    ##  For now all lines are handled with rounded ends ...
+
+    ##  Need to convert the elem.xy vertices into a points array ...
+    X = []
+    Y = []
+    R = []
+
+    ##  Need to convert Nanometers in the GDS file to microns ...
+    ##
+    ##  @TODO - extract actual units from GDS file and handle them properly!
+    ##
+
+    for xy in elem.xy:
+        X.append(xy[0] * 0.001)  ## Assumed to be converting from nanometers to microns
+        Y.append(xy[1] * 0.001)  ## Assumed to be converting from nanometers to microns
+        R.append(0.0)
+
+
+    ##  Convert the lists into a Tuple to pass to Xpedition as a Points Array
+    xyr = (tuple(X), tuple(Y), tuple(R))
+
+    ##  Get the path width
+    W = elem.width * 0.001  ## Assumed to be converting from nanometers to microns
+
+    uln = "GDS_{}.{}".format(elem.layer, elem.data_type)
+    if progress:
+        Transcript("Drawing Path on {}".format(uln), "note")
+
+    ##  Check if GDS user layer has already been setup
+    ul = pcbDoc.FindUserLayer(uln)
+
+    ##  If the user layer doesn't exist, something is wrong ...
+    if ul == None:
+        Transcript("Unable to find User Layer \"{}\", Boundary element skipped.".format(uln), "error")
+    else:
+        pcbDoc.PutUserLayerGfx(ul, W, len(X), xyr, False, None, constants.epcbUnitUM)
 
 
 def usage(prog):
